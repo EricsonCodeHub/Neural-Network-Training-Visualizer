@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neural Network Training Visualizer</title>
+    <style>
+        body { font-family: Arial, sans-serif; display: flex; flex-direction: column; align-items: center; margin: 20px; background-color: #f0f0f0; }
+        #controls { margin-bottom: 20px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 15px; }
+        .control-group { display: flex; flex-direction: column; align-items: flex-start; }
+        .control-group label { margin-bottom: 5px; font-weight: bold; }
+        .control-group input[type="number"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 60px; text-align: center; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 5px; font-size: 16px; transition: background-color 0.2s; }
+        button:hover:not(:disabled) { background-color: #0056b3; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+
+        button#stopButton { background-color: #dc3545; }
+        button#stopButton:hover:not(:disabled) { background-color: #c82333; }
+
+        #visualization-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; }
+        #network-canvas { border: 1px solid #ccc; background-color: white; box-shadow: 2px 2px 8px rgba(0,0,0,0.1); }
+        #info-panel {
+            border: 1px solid #ccc;
+            padding: 15px;
+            background-color: white;
+            width: 300px;
+            box-shadow: 2px 2px 8px rgba(0,0,0,0.1);
+        }
+        #info-panel h2 { margin-top: 0; color: #333; }
+        #info-panel p { margin-bottom: 8px; }
+        #info-panel strong { color: #555; }
+
+        #loss-chart { border: 1px solid #ccc; background-color: white; box-shadow: 2px 2px 8px rgba(0,0,0,0.1); }
+        .status-message {
+            margin-left: 20px;
+            font-weight: bold;
+            color: #555;
+        }
+        .status-message.training { color: #28a745; }
+        .status-message.ready { color: #007bff; }
+        .status-message.error { color: #dc3545; }
+
+        #legend {
+            margin-top: 20px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            background-color: white;
+            box-shadow: 2px 2px 8px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        #legend div {
+            display: inline-block;
+            margin: 0 10px;
+            font-size: 0.9em;
+        }
+        #legend .color-box {
+            width: 20px;
+            height: 10px;
+            border: 1px solid #333;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 5px;
+        }
+        #legend .line-example {
+            height: 2px;
+            width: 30px;
+            background-color: black; /* Example line for thickness */
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 5px;
+        }
+        #legend .thick-line {
+            height: 4px; /* Thicker example */
+            background-color: black;
+        }
+    </style>
+</head>
+<body>
+    <h1>Neural Network Training Visualizer</h1>
+
+    <div id="controls">
+        <div class="control-group">
+            <label for="hiddenLayers">Hidden Layers:</label>
+            <input type="number" id="hiddenLayers" value="2" min="1" max="5">
+        </div>
+        <div class="control-group">
+            <label for="nodesPerLayer">Nodes per Layer:</label>
+            <input type="number" id="nodesPerLayer" value="3" min="1" max="10">
+        </div>
+        <button id="initializeButton">Initialize Network</button>
+        <button id="startButton" disabled>Start Training</button>
+        <button id="stopButton" disabled>Stop Training</button>
+        <div id="trainingStatus" class="status-message">Please Initialize Network</div>
+    </div>
+
+    <div id="info-panel">
+        <h2>Training Info</h2>
+        <p><strong>Epoch:</strong> <span id="epochDisplay">0</span></p>
+        <p><strong>Current Loss:</strong> <span id="lossDisplay">N/A</span></p>
+        <p><strong>Average Loss:</strong> <span id="avgLossDisplay">N/A</span></p>
+        <p><strong>Input:</strong> <span id="inputDisplay">N/A</span></p>
+        <p><strong>Target:</strong> <span id="targetDisplay">N/A</span></p>
+        <p><strong>Output:</strong> <span id="outputDisplay">N/A</span></p>
+    </div>
+
+    <div id="visualization-container">
+        <canvas id="network-canvas" width="600" height="400"></canvas>
+        <canvas id="loss-chart" width="400" height="400"></canvas>
+    </div>
+
+    <div id="legend">
+        <h2>Weight Visualization Legend</h2>
+        <div>
+            <span class="color-box" style="background-color: green;"></span> Positive Weight
+        </div>
+        <div>
+            <span class="color-box" style="background-color: red;"></span> Negative Weight
+        </div>
+        <div>
+            <span class="line-example"></span> Thin Line: Small Weight Magnitude
+        </div>
+        <div>
+            <span class="line-example thick-line"></span> Thick Line: Large Weight Magnitude
+        </div>
+        <div>
+            <span class="color-box" style="background-color: #cccccc;"></span> Summation Connections (Fixed)
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        // === NeuralNetwork Class ===
+        class NeuralNetwork {
+            nn;
+            bias;
+            xPerLayer;
+            xReluPerLayer;
+
+            tanh(x) {
+                return Math.tanh(x);
+            }
+
+            tanhDerivative(x) {
+                const t = Math.tanh(x);
+                return 1 - t * t;
+            }
+
+            constructor(xInputs, layers, nodesPerLayer) {
+                this.nn = new Array(layers);
+                this.bias = new Array(layers);
+                this.xPerLayer = new Array(layers);
+                this.xReluPerLayer = new Array(layers);
+
+                for (let k = 0; k < layers; k++) {
+                    const currentLayerInputSize = (k === 0) ? xInputs : nodesPerLayer;
+
+                    this.nn[k] = new Array(nodesPerLayer).fill(0).map(() =>
+                        new Array(currentLayerInputSize).fill(0)
+                    );
+                    this.bias[k] = new Array(nodesPerLayer).fill(0);
+                    this.xPerLayer[k] = new Array(nodesPerLayer).fill(0);
+                    this.xReluPerLayer[k] = new Array(nodesPerLayer).fill(0);
+
+                    for (let j = 0; j < nodesPerLayer; j++) {
+                        this.bias[k][j] = Math.random() * 0.2 - 0.1;
+                        for (let i = 0; i < currentLayerInputSize; i++) {
+                            this.nn[k][j][i] = Math.random() * 0.2 - 0.1;
+                        }
+                    }
+                }
+                console.log("nn created (JavaScript translation with dynamic nodes)");
+            }
+
+            forwardPass(x) {
+                let currentLayerOutput = [...x];
+
+                for (let k = 0; k < this.nn.length; k++) {
+                    const nextLayerInput = new Array(this.nn[k].length).fill(0);
+
+                    for (let j = 0; j < this.nn[k].length; j++) {
+                        let preActivation = 0;
+                        for (let i = 0; i < currentLayerOutput.length; i++) {
+                            preActivation += currentLayerOutput[i] * this.nn[k][j][i];
+                        }
+
+                        this.xPerLayer[k][j] = preActivation + this.bias[k][j];
+                        this.xReluPerLayer[k][j] = this.tanh(this.xPerLayer[k][j]);
+                        nextLayerInput[j] = this.xReluPerLayer[k][j];
+                    }
+                    currentLayerOutput = nextLayerInput;
+                }
+
+                let y = 0;
+                for (let i = 0; i < currentLayerOutput.length; i++) {
+                    y += currentLayerOutput[i];
+                }
+
+                return y;
+            }
+
+            train(x, y, lr) {
+                const p = this.forwardPass(x);
+                const error = p - y;
+                const loss = error * error;
+
+                const deltas = new Array(this.nn.length).fill(0).map((_, k) => new Array(this.nn[k].length).fill(0));
+
+                const lastLayerIdx = this.nn.length - 1;
+                for (let j = 0; j < this.nn[lastLayerIdx].length; j++) {
+                    deltas[lastLayerIdx][j] = 2 * error * this.tanhDerivative(this.xPerLayer[lastLayerIdx][j]);
+                }
+
+                for (let k = lastLayerIdx - 1; k >= 0; k--) {
+                    for (let i = 0; i < this.nn[k].length; i++) {
+                        let sumOfWeightedDeltasFromNextLayer = 0;
+                        for (let j = 0; j < this.nn[k + 1].length; j++) {
+                            if (this.nn[k+1][j] && this.nn[k+1][j][i] !== undefined) {
+                                sumOfWeightedDeltasFromNextLayer += deltas[k + 1][j] * this.nn[k + 1][j][i];
+                            }
+                        }
+                        deltas[k][i] = sumOfWeightedDeltasFromNextLayer * this.tanhDerivative(this.xPerLayer[k][i]);
+                    }
+                }
+
+                for (let k = 0; k < this.nn.length; k++) {
+                    const inputToCurrentLayer = (k === 0) ? x : this.xReluPerLayer[k - 1];
+
+                    for (let j = 0; j < this.nn[k].length; j++) {
+                        this.bias[k][j] -= lr * deltas[k][j];
+                        for (let i = 0; i < inputToCurrentLayer.length; i++) {
+                            this.nn[k][j][i] -= lr * deltas[k][j] * inputToCurrentLayer[i];
+                        }
+                    }
+                }
+
+                return {
+                    loss: loss,
+                    weights: JSON.parse(JSON.stringify(this.nn)),
+                    biases: JSON.parse(JSON.stringify(this.bias)),
+                    outputWeights: null,
+                    outputBias: null
+                };
+            }
+        }
+
+        // === Main Script Logic ===
+        const canvas = document.getElementById('network-canvas');
+        const ctx = canvas.getContext('2d');
+
+        const lossCanvas = document.getElementById('loss-chart');
+        const lossCtx = lossCanvas.getContext('2d');
+        let lossChart;
+
+        const epochDisplay = document.getElementById('epochDisplay');
+        const lossDisplay = document.getElementById('lossDisplay');
+        const avgLossDisplay = document.getElementById('avgLossDisplay');
+        const inputDisplay = document.getElementById('inputDisplay');
+        const targetDisplay = document.getElementById('targetDisplay');
+        const outputDisplay = document.getElementById('outputDisplay');
+        const trainingStatusDisplay = document.getElementById('trainingStatus');
+
+        const initializeButton = document.getElementById('initializeButton');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+
+        const hiddenLayersInput = document.getElementById('hiddenLayers');
+        const nodesPerLayerInput = document.getElementById('nodesPerLayer');
+
+        const NODE_RADIUS = 15;
+        const LAYER_SPACING = 150;
+        const NODE_SPACING = 50;
+
+        let nn;
+
+        const trainingData = [
+            { x: [0.1, 0.2, 0.3], y: 0.5 },
+            { x: [0.5, -0.4, 0.2], y: 0.8 },
+            { x: [0.9, 0.1, -0.2], y: 0.2 },
+            { x: [0.3, 0.7, -0.5], y: 0.9 }
+        ];
+        const xInputs = trainingData[0].x.length;
+
+        const epochs = 5000;
+        const lr = 0.01;
+
+        let trainingActive = false;
+        let currentEpoch = 0;
+        let animationFrameId;
+
+        function initializeLossChart() {
+            lossChart = new Chart(lossCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Average Loss',
+                        data: [],
+                        borderColor: 'rgb(75, 192, 192)',
+                        tension: 0.1,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    animation: {
+                        duration: 0
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Epoch'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Loss'
+                            },
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        function clearInfoDisplays() {
+            epochDisplay.textContent = '0';
+            lossDisplay.textContent = 'N/A';
+            avgLossDisplay.textContent = 'N/A';
+            inputDisplay.textContent = 'N/A';
+            targetDisplay.textContent = 'N/A';
+            outputDisplay.textContent = 'N/A';
+        }
+
+        function drawNetwork(weights, biases, inputNodesCount, numHiddenLayers, nodesPerLayerUsedByNN) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const layersConfig = [];
+
+            const inputLayerYStart = (canvas.height - (inputNodesCount - 1) * NODE_SPACING) / 2;
+            const inputNodes = [];
+            for (let i = 0; i < inputNodesCount; i++) {
+                inputNodes.push({
+                    x: 50,
+                    y: inputLayerYStart + i * NODE_SPACING,
+                    label: `In ${i + 1}`
+                });
+            }
+            layersConfig.push(inputNodes);
+
+            for (let k = 0; k < numHiddenLayers; k++) {
+                const layerNodes = [];
+                const currentLayerNodesCount = nodesPerLayerUsedByNN;
+                const layerYStart = (canvas.height - (currentLayerNodesCount - 1) * NODE_SPACING) / 2;
+                for (let j = 0; j < currentLayerNodesCount; j++) {
+                    layerNodes.push({
+                        x: 50 + (k + 1) * LAYER_SPACING,
+                        y: layerYStart + j * NODE_SPACING,
+                        label: `H${k + 1}-${j + 1}`
+                    });
+                }
+                layersConfig.push(layerNodes);
+            }
+
+            const outputLayerNodes = [{
+                x: 50 + (numHiddenLayers + 1) * LAYER_SPACING,
+                y: canvas.height / 2,
+                label: `Sum Out`
+            }];
+            layersConfig.push(outputLayerNodes);
+
+            for (let k = 0; k < layersConfig.length - 1; k++) {
+                const currentLayerNodes = layersConfig[k];
+                const nextLayerNodes = layersConfig[k + 1];
+
+                for (let i = 0; i < currentLayerNodes.length; i++) {
+                    for (let j = 0; j < nextLayerNodes.length; j++) {
+                        ctx.beginPath();
+                        ctx.moveTo(currentLayerNodes[i].x + NODE_RADIUS, currentLayerNodes[i].y);
+                        ctx.lineTo(nextLayerNodes[j].x - NODE_RADIUS, nextLayerNodes[j].y);
+
+                        let weightVal = 0;
+                        if (weights && k < weights.length) {
+                            if (weights[k] && weights[k][j] && weights[k][j][i] !== undefined) {
+                                weightVal = weights[k][j][i];
+                            }
+                            ctx.lineWidth = Math.max(0.8, Math.abs(weightVal) * 15);
+                            ctx.strokeStyle = weightVal > 0 ? 'green' : 'red';
+                        } else {
+                            ctx.lineWidth = 1;
+                            ctx.strokeStyle = '#cccccc';
+                        }
+                        ctx.stroke();
+                    }
+                }
+            }
+
+            layersConfig.flat().forEach(node => {
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, NODE_RADIUS, 0, Math.PI * 2);
+                ctx.fillStyle = 'blue';
+                ctx.fill();
+                ctx.strokeStyle = 'black';
+                ctx.stroke();
+
+                ctx.fillStyle = 'white';
+                ctx.font = '12px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(node.label, node.x, node.y);
+            });
+
+            if (biases) {
+                for (let k = 0; k < biases.length; k++) {
+                    const currentLayerNodes = layersConfig[k + 1];
+                    for (let j = 0; j < biases[k].length; j++) {
+                        if (biases[k] && biases[k][j] !== undefined) {
+                            ctx.fillStyle = 'black';
+                            ctx.font = '10px Arial';
+                            ctx.textAlign = 'left';
+                            ctx.fillText(`b: ${biases[k][j].toFixed(2)}`, currentLayerNodes[j].x + NODE_RADIUS + 5, currentLayerNodes[j].y);
+                        }
+                    }
+                }
+            }
+        }
+
+        async function trainNetworkLoop() {
+            const numHiddenLayers = parseInt(hiddenLayersInput.value);
+            const nodesPerLayerInputVal = parseInt(nodesPerLayerInput.value);
+
+            if (!trainingActive || currentEpoch >= epochs) {
+                trainingActive = false;
+                trainingStatusDisplay.textContent = 'Training Finished!';
+                trainingStatusDisplay.classList.remove('training');
+                trainingStatusDisplay.classList.add('ready');
+                cancelAnimationFrame(animationFrameId);
+                console.log('Training completed or stopped!');
+                startButton.disabled = false;
+                return;
+            }
+
+            trainingStatusDisplay.textContent = `Training... Epoch ${currentEpoch + 1} / ${epochs}`;
+            trainingStatusDisplay.classList.add('training');
+            trainingStatusDisplay.classList.remove('ready');
+
+            let totalLoss = 0;
+            for (const data of trainingData) {
+                const { loss, weights, biases } = nn.train(data.x, data.y, lr);
+                totalLoss += loss;
+
+                epochDisplay.textContent = currentEpoch;
+                lossDisplay.textContent = loss.toFixed(6);
+                inputDisplay.textContent = `[${data.x.map(val => val.toFixed(2)).join(', ')}]`;
+                targetDisplay.textContent = data.y.toFixed(4);
+                outputDisplay.textContent = nn.forwardPass(data.x).toFixed(4);
+
+                drawNetwork(weights, biases, xInputs, numHiddenLayers, nodesPerLayerInputVal);
+
+                await new Promise(resolve => setTimeout(resolve, 5));
+            }
+
+            const avgLoss = (totalLoss / trainingData.length);
+            avgLossDisplay.textContent = avgLoss.toFixed(4);
+
+            lossChart.data.labels.push(currentEpoch);
+            lossChart.data.datasets[0].data.push(avgLoss);
+            lossChart.update();
+
+            currentEpoch++;
+            animationFrameId = requestAnimationFrame(trainNetworkLoop);
+        }
+
+        startButton.addEventListener('click', () => {
+            if (!nn) {
+                trainingStatusDisplay.textContent = 'Error: Network not initialized!';
+                trainingStatusDisplay.classList.add('error');
+                return;
+            }
+            if (!trainingActive) {
+                trainingActive = true;
+                startButton.disabled = true;
+                initializeButton.disabled = true;
+                stopButton.disabled = false;
+
+                const numHiddenLayers = parseInt(hiddenLayersInput.value);
+                const nodesPerLayerInputVal = parseInt(nodesPerLayerInput.value);
+                drawNetwork(nn.nn, nn.bias, xInputs, numHiddenLayers, nodesPerLayerInputVal);
+
+                trainNetworkLoop();
+            }
+        });
+
+        stopButton.addEventListener('click', () => {
+            if (trainingActive) {
+                trainingActive = false;
+                trainingStatusDisplay.textContent = 'Training Paused.';
+                trainingStatusDisplay.classList.remove('training');
+                trainingStatusDisplay.classList.add('ready');
+                cancelAnimationFrame(animationFrameId);
+                startButton.disabled = false;
+                initializeButton.disabled = false;
+                stopButton.disabled = true;
+                console.log("Training paused.");
+            }
+        });
+
+        initializeButton.addEventListener('click', () => {
+            if (trainingActive) {
+                trainingActive = false;
+                cancelAnimationFrame(animationFrameId);
+            }
+            clearInfoDisplays();
+
+            const numHiddenLayers = parseInt(hiddenLayersInput.value);
+            const nodesPerLayerInputVal = parseInt(nodesPerLayerInput.value);
+
+            if (isNaN(numHiddenLayers) || numHiddenLayers < 1 || numHiddenLayers > 5) {
+                trainingStatusDisplay.textContent = 'Error: Invalid Hidden Layers (1-5)!';
+                trainingStatusDisplay.classList.add('error');
+                startButton.disabled = true;
+                return;
+            }
+            if (isNaN(nodesPerLayerInputVal) || nodesPerLayerInputVal < 1 || nodesPerLayerInputVal > 10) {
+                trainingStatusDisplay.textContent = 'Error: Invalid Nodes per Layer (1-10)!';
+                trainingStatusDisplay.classList.add('error');
+                startButton.disabled = true;
+                return;
+            }
+
+            trainingStatusDisplay.classList.remove('error', 'training');
+            trainingStatusDisplay.classList.add('ready');
+            trainingStatusDisplay.textContent = 'Network Initialized. Ready to train.';
+
+            nn = new NeuralNetwork(xInputs, numHiddenLayers, nodesPerLayerInputVal);
+
+            drawNetwork(nn.nn, nn.bias, xInputs, numHiddenLayers, nodesPerLayerInputVal);
+
+            lossChart.data.labels = [];
+            lossChart.data.datasets[0].data = [];
+            lossChart.update();
+
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            initializeButton.disabled = false;
+            currentEpoch = 0;
+            console.log(`Network initialized with ${numHiddenLayers} layers and ${nodesPerLayerInputVal} nodes per layer.`);
+        });
+
+        window.onload = () => {
+            initializeLossChart();
+            drawNetwork(null, null, xInputs, parseInt(hiddenLayersInput.value), parseInt(nodesPerLayerInput.value));
+            clearInfoDisplays();
+            startButton.disabled = true;
+            stopButton.disabled = true;
+        };
+    </script>
+</body>
+</html>
